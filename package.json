@@ -1,0 +1,22 @@
+{
+  "name": "voice-shooter-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Voice controlled shooting game Android package",
+  "scripts": {
+    "prepare:web": "node scripts/prepare-web.js",
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npm run prepare:web && npx cap sync",
+    "cap:open:android": "npx cap open android",
+    "build:apk:debug": "cd android && gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>말로 하는 슈팅 게임</title>
+  <style>
+    :root {
+      --bg: #060b1f;
+      --panel: rgba(8, 16, 44, 0.88);
+      --line: #5fc4ff;
+      --text: #d7f4ff;
+      --accent: #ffe66d;
+      --danger: #ff6b6b;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at 30% 10%, #11234f, #040813 72%);
+      color: var(--text);
+      font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+
+    #app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      width: min(100vw, 900px);
+      height: min(100vh, 1400px);
+      max-height: 100vh;
+      image-rendering: pixelated;
+      border: 2px solid rgba(95, 196, 255, 0.35);
+      background: linear-gradient(#040713, #080f2b);
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: rgba(2, 6, 15, 0.65);
+      backdrop-filter: blur(2px);
+    }
+
+    .panel {
+      width: min(680px, 92vw);
+      border: 2px solid rgba(95, 196, 255, 0.45);
+      background: var(--panel);
+      padding: 16px;
+      border-radius: 14px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.35);
+    }
+
+    h1, h2, p { margin: 8px 0; }
+    .small { font-size: 0.9rem; opacity: 0.9; }
+    .status { color: var(--accent); min-height: 1.4em; }
+    .danger { color: var(--danger); }
+    .btn {
+      display: inline-block;
+      margin-top: 12px;
+      border: 0;
+      background: #2f8bff;
+      color: white;
+      font-weight: 700;
+      border-radius: 10px;
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    .kbd {
+      display: inline-block;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      border-radius: 6px;
+      padding: 2px 8px;
+      margin: 0 4px;
+      font-size: 0.88rem;
+      color: #fff;
+    }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game" width="360" height="640" aria-label="음성 슈팅 게임"></canvas>
+    <div id="overlay" class="overlay">
+      <div class="panel">
+        <h1>말로 하는 슈팅 게임</h1>
+        <p>마이크 권한이 필요합니다. 아래 버튼을 눌러 권한 요청을 시작하세요.</p>
+        <p class="small">지원 환경: Chrome(PC/Android), iOS Safari/Chrome(webkitSpeechRecognition 지원 시)</p>
+        <p class="small">권한 요청이 안 뜨면 HTTPS 또는 localhost에서 실행하세요.</p>
+        <button id="startBtn" class="btn">시작하기</button>
+        <p id="bootStatus" class="status"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const overlay = document.getElementById("overlay");
+      const bootStatus = document.getElementById("bootStatus");
+      const startBtn = document.getElementById("startBtn");
+
+      const W = canvas.width;
+      const H = canvas.height;
+      const STORAGE_KEYS = {
+        keywords: "voiceShooter.keywords.v1",
+        scores: "voiceShooter.scores.v1"
+      };
+      const DEFAULT_KEYWORDS = { left: "왼쪽", right: "오른쪽", fire: "뿅", settings: "설정", yes: "예", no: "아니오" };
+      const LEGACY_DEFAULT_KEYWORDS = { left: "좌", right: "우", fire: "발사" };
+      const KEYWORD_KEYS = ["left", "right", "fire", "settings", "yes", "no"];
+      /** 설정 화면 종료 행 표시용 — 이 문자열은 이동/발사 키워드로 저장되지 않게 예약합니다. */
+      const SETTINGS_EXIT_DISPLAY = "종료";
+      /** UI 안내(종료·확인 등)와 겹쳐 저장되기 쉬운 단어 — 이동/발사 슬롯에선 거절·로드 시 복구 */
+      const RESERVED_FOR_MOVE_SLOTS = new Set(["닫기", "확인", "종료"]);
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const state = {
+        scene: "boot",
+        score: 0,
+        stage: 1,
+        stageTime: 0,
+        health: 100,
+        message: "",
+        permissionDenied: false,
+        unsupported: !SpeechRecognition,
+        heardText: "",
+        recognitionActive: false,
+        usingAndroidBridge: false,
+        usingNativeSpeech: false,
+        nativeMode: "partial",
+        debugText: "",
+        keywords: loadKeywords(),
+        settingsItems: ["left", "right", "fire", "설정닫기"],
+        settingsEditSlot: null,
+        settingsEditStage: null,
+        settingsRevertKeyword: "",
+        settingsBlinkKey: null,
+        settingsPreviewText: "",
+        tutorial: { step: 0, stepDone: false, okTextTimer: 0, nextStepTimer: 0 },
+        transition: { phase: null, timer: 0, clearStage: 0 },
+        playPausedSec: 0,
+        nameEntry: { candidate: "", waitingConfirm: false },
+        replayPrompt: false,
+        tutorialSeen: false,
+        leaderboard: loadScores()
+      };
+      saveKeywords();
+
+      const player = { x: W / 2 - 11, y: H - 84, w: 22, h: 22, cooldown: 0, flash: 0 };
+      const bullets = [];
+      const enemies = [];
+      const bombs = [];
+      const stars = Array.from({ length: 64 }, () => ({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        s: 1 + Math.random() * 2,
+        v: 0.5 + Math.random() * 1.5
+      }));
+      const TUTORIAL_STEPS = ["left", "right", "fire"];
+
+      let recognition = null;
+      let lastTime = performance.now();
+      const voiceCooldownAt = new Map();
+      let nativeSpeechReady = false;
+      let nativeRestartTimer = null;
+      let nativeStartWatchdog = null;
+      let nativeInitTimer = null;
+      let nativeStarting = false;
+      let androidVoiceBound = false;
+      let androidVoiceTimer = null;
+
+      function getNativeSpeech() {
+        return window.Capacitor?.Plugins?.SpeechRecognition || null;
+      }
+
+      function getAndroidVoice() {
+        return window.AndroidVoice || null;
+      }
+
+      function setDebug(text) {
+        state.debugText = text;
+      }
+
+      function sanitizeKeywords(parsed) {
+        const src = parsed && typeof parsed === "object" ? parsed : {};
+        const out = { ...DEFAULT_KEYWORDS };
+        for (const key of KEYWORD_KEYS) {
+          const v = src[key];
+          if (v == null) continue;
+          const s = String(v).replace(/\s+/g, "").trim().slice(0, 8);
+          if (!s) continue;
+          out[key] = s;
+        }
+        for (const slot of ["left", "right", "fire"]) {
+          if (RESERVED_FOR_MOVE_SLOTS.has(out[slot])) out[slot] = DEFAULT_KEYWORDS[slot];
+        }
+        return out;
+      }
+
+      function loadKeywords() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.keywords) || "{}");
+          // 과거 기본값(좌/우/발사)만 저장된 경우, 새 기본값(왼쪽/오른쪽/뿅)으로 1회 자동 전환
+          if (
+            parsed &&
+            parsed.left === LEGACY_DEFAULT_KEYWORDS.left &&
+            parsed.right === LEGACY_DEFAULT_KEYWORDS.right &&
+            parsed.fire === LEGACY_DEFAULT_KEYWORDS.fire
+          ) {
+            return { ...DEFAULT_KEYWORDS, settings: parsed.settings || DEFAULT_KEYWORDS.settings, yes: parsed.yes || DEFAULT_KEYWORDS.yes, no: parsed.no || DEFAULT_KEYWORDS.no };
+          }
+          return sanitizeKeywords(parsed);
+        } catch {
+          return { ...DEFAULT_KEYWORDS };
+        }
+      }
+
+      function saveKeywords() {
+        const slim = {};
+        for (const key of KEYWORD_KEYS) slim[key] = state.keywords[key];
+        localStorage.setItem(STORAGE_KEYS.keywords, JSON.stringify(slim));
+      }
+
+      function loadScores() {
+        try {
+          const list = JSON.parse(localStorage.getItem(STORAGE_KEYS.scores) || "[]");
+          return Array.isArray(list) ? list : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function saveScore(name, score) {
+        state.leaderboard.push({ name, score, at: Date.now() });
+        state.leaderboard.sort((a, b) => b.score - a.score);
+        state.leaderboard = state.leaderboard.slice(0, 8);
+        localStorage.setItem(STORAGE_KEYS.scores, JSON.stringify(state.leaderboard));
+      }
+
+      function setMessage(text) {
+        state.message = text;
+      }
+
+      function normalizeSpeech(text) {
+        return String(text || "")
+          .toLowerCase()
+          .replace(/[^0-9a-zA-Z가-힣]/g, "")
+          .trim();
+      }
+
+      function hasKeyword(text, keyword) {
+        const t = normalizeSpeech(text);
+        const k = normalizeSpeech(keyword);
+        return Boolean(t && k && t.includes(k));
+      }
+
+      function keywordAliases(action) {
+        const custom = state.keywords[action];
+        const base = DEFAULT_KEYWORDS[action];
+        const aliases = [custom, base];
+        if (action === "right") aliases.push("오", "오른", "오른쪽", "우측");
+        if (action === "left") aliases.push("왼", "왼쪽", "좌측");
+        if (action === "no") aliases.push("아니요");
+        return [...new Set(aliases.filter(Boolean))];
+      }
+
+      function matchesAction(text, action) {
+        return keywordAliases(action).some((word) => hasKeyword(text, word));
+      }
+
+      function lastActionPos(text, action) {
+        return keywordAliases(action).reduce((max, word) => Math.max(max, lastKeywordPos(text, word)), -1);
+      }
+
+      function lastKeywordPos(text, keyword) {
+        const t = normalizeSpeech(text);
+        const k = normalizeSpeech(keyword);
+        if (!t || !k) return -1;
+        return t.lastIndexOf(k);
+      }
+
+      function allowVoiceAction(action, ms = 180) {
+        const now = performance.now();
+        const prev = voiceCooldownAt.get(action) || 0;
+        if (now - prev < ms) return false;
+        voiceCooldownAt.set(action, now);
+        return true;
+      }
+
+      function slotDisplayLabel(slot) {
+        return { left: "왼쪽", right: "오른쪽", fire: "뿅" }[slot] || slot;
+      }
+
+      function clearSettingsEdit() {
+        state.settingsEditSlot = null;
+        state.settingsEditStage = null;
+        state.settingsBlinkKey = null;
+        state.settingsRevertKeyword = "";
+        state.settingsPreviewText = "";
+      }
+
+      function startSettingsEdit(slot) {
+        state.settingsEditSlot = slot;
+        state.settingsEditStage = "need_word";
+        state.settingsBlinkKey = slot;
+        state.settingsRevertKeyword = state.keywords[slot];
+        state.settingsPreviewText = "";
+        setMessage(`${slotDisplayLabel(slot)}: 새 단어 인식될 때까지 점멸 → 인식 후에도 점멸 유지 → '확인'으로 이 항목 설정 종료`);
+      }
+
+      function speakHint(text) {
+        if (!("speechSynthesis" in window)) return;
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "ko-KR";
+        u.rate = 1.05;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+      }
+
+      async function requestMicPermission() {
+        bootStatus.textContent = "마이크 권한 요청 중...";
+        try {
+          const AndroidVoice = getAndroidVoice();
+          const NativeSpeech = getNativeSpeech();
+          if (AndroidVoice?.isAvailable?.()) {
+            let granted = false;
+            try {
+              granted = !!AndroidVoice.hasPermission?.();
+            } catch {}
+            if (!granted) {
+              AndroidVoice.requestPermission?.();
+              await new Promise((r) => setTimeout(r, 350));
+              granted = !!AndroidVoice.hasPermission?.();
+            }
+            if (!granted) throw new Error("android bridge mic permission denied");
+            state.usingAndroidBridge = true;
+            state.usingNativeSpeech = false;
+            bootStatus.textContent = "안드로이드 네이티브 음성 브리지 모드 활성화";
+            setDebug("ANDROID bridge ready");
+          } else if (NativeSpeech) {
+            try {
+              const availability = await NativeSpeech.available();
+              if (!availability?.available) throw new Error("native speech unavailable");
+            } catch (e) {
+              throw new Error("native speech unavailable");
+            }
+            let granted = false;
+            try {
+              const p = NativeSpeech.checkPermissions
+                ? await NativeSpeech.checkPermissions()
+                : await NativeSpeech.hasPermission();
+              granted = p?.speechRecognition === "granted";
+            } catch {}
+            if (!granted) {
+              const p2 = NativeSpeech.requestPermissions
+                ? await NativeSpeech.requestPermissions()
+                : await NativeSpeech.requestPermission();
+              granted = p2?.speechRecognition === "granted";
+            }
+            if (!granted) throw new Error("native mic permission denied");
+            state.usingAndroidBridge = false;
+            state.usingNativeSpeech = true;
+            state.nativeMode = "popup";
+            bootStatus.textContent = "네이티브 음성인식 모드 활성화";
+            setDebug("NATIVE mode ready");
+          } else {
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            state.usingAndroidBridge = false;
+            state.usingNativeSpeech = false;
+            bootStatus.textContent = "웹 음성인식 모드 활성화";
+            setDebug("WEB mode ready");
+          }
+          bootStatus.textContent = "권한 허용 완료. 튜토리얼을 시작합니다.";
+          if (state.tutorialSeen) startGame();
+          else startTutorial();
+          initRecognition();
+        } catch (err) {
+          state.permissionDenied = true;
+          bootStatus.innerHTML = '<span class="danger">마이크 권한이 필요합니다. 브라우저 설정에서 마이크 권한을 허용해주세요.</span>';
+          console.error(err);
+        }
+      }
+
+      function initRecognition() {
+        const AndroidVoice = getAndroidVoice();
+        const NativeSpeech = getNativeSpeech();
+        if (state.usingAndroidBridge && AndroidVoice) {
+          initAndroidBridgeRecognition();
+          return;
+        }
+        if (state.usingNativeSpeech && NativeSpeech) {
+          setDebug("NATIVE loop start");
+          ensureNativeRecognitionLoop();
+          return;
+        }
+        if (!SpeechRecognition) return;
+        recognition = new SpeechRecognition();
+        recognition.lang = "ko-KR";
+        recognition.interimResults = true;
+        recognition.continuous = true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => state.recognitionActive = true;
+        recognition.onend = () => {
+          state.recognitionActive = false;
+          if (state.scene !== "boot" && !state.permissionDenied) {
+            setTimeout(() => {
+              try { recognition.start(); } catch {}
+            }, 240);
+          }
+        };
+        recognition.onerror = (e) => {
+          if (e.error === "not-allowed") {
+            state.permissionDenied = true;
+            state.scene = "boot";
+            showBootError();
+          }
+        };
+        recognition.onresult = (event) => {
+          const latest = event.results[event.results.length - 1];
+          if (!latest || !latest[0]) return;
+          const text = latest[0].transcript || "";
+          if (!text.trim()) return;
+          state.heardText = normalizeSpeech(text);
+          handleVoiceCommand(text, { isFinal: latest.isFinal });
+        };
+        try { recognition.start(); } catch {}
+      }
+
+      function queueAndroidVoiceStart(delayMs = 280) {
+        const AndroidVoice = getAndroidVoice();
+        if (!state.usingAndroidBridge || !AndroidVoice) return;
+        if (androidVoiceTimer) clearTimeout(androidVoiceTimer);
+        androidVoiceTimer = setTimeout(() => {
+          androidVoiceTimer = null;
+          try {
+            AndroidVoice.start();
+            state.recognitionActive = true;
+            setDebug("ANDROID bridge start()");
+          } catch (e) {
+            setDebug(`ANDROID bridge start error: ${String(e?.message || e)}`);
+          }
+        }, delayMs);
+      }
+
+      function initAndroidBridgeRecognition() {
+        const AndroidVoice = getAndroidVoice();
+        if (!AndroidVoice) return;
+        if (!androidVoiceBound) {
+          window.addEventListener("android-voice", (evt) => {
+            const type = String(evt?.detail?.type || "");
+            const text = String(evt?.detail?.text || "");
+            if (type === "result") {
+              state.heardText = normalizeSpeech(text);
+              setDebug(`ANDROID result: ${state.heardText || "empty"}`);
+              handleVoiceCommand(text, { isFinal: true });
+              queueAndroidVoiceStart(35);
+              return;
+            }
+            if (type === "partial") {
+              state.heardText = normalizeSpeech(text);
+              setDebug(`ANDROID partial: ${state.heardText || "empty"}`);
+              const immediate = state.scene === "playing" || state.scene === "tutorial";
+              handleVoiceCommand(text, { isFinal: immediate });
+              return;
+            }
+            if (type === "error") {
+              state.recognitionActive = false;
+              setDebug(`ANDROID error: ${text || "unknown"}`);
+              queueAndroidVoiceStart(180);
+              return;
+            }
+            if (type === "ready" || type === "begin" || type === "start") {
+              state.recognitionActive = true;
+              setDebug(`ANDROID state: ${type}`);
+              return;
+            }
+            if (type === "end") {
+              state.recognitionActive = false;
+              setDebug("ANDROID state: end");
+              queueAndroidVoiceStart(80);
+            }
+          });
+          androidVoiceBound = true;
+        }
+        queueAndroidVoiceStart(30);
+      }
+
+      async function initNativeRecognition() {
+        const NativeSpeech = getNativeSpeech();
+        if (!NativeSpeech) return;
+        try {
+          if (!nativeSpeechReady) {
+            NativeSpeech.removeAllListeners();
+            await NativeSpeech.addListener("partialResults", (data) => {
+              const list = Array.isArray(data?.matches) ? data.matches : [];
+              if (!list.length) return;
+              if (nativeStartWatchdog) { clearTimeout(nativeStartWatchdog); nativeStartWatchdog = null; }
+              const text = list[0] || "";
+              state.heardText = normalizeSpeech(text);
+              setDebug(`NATIVE partial: ${state.heardText}`);
+              handleVoiceCommand(text, { isFinal: true });
+            });
+            await NativeSpeech.addListener("listeningState", (data) => {
+              const status = String(data?.status || "").toLowerCase();
+              state.recognitionActive = status === "started";
+              setDebug(`NATIVE state: ${status} (${state.nativeMode})`);
+              if ((status === "stopped" || status === "done") && state.scene !== "boot" && !state.permissionDenied) {
+                queueNativeRestart(250);
+              }
+            });
+            nativeSpeechReady = true;
+          }
+          await restartNativeRecognition();
+        } catch (err) {
+          setDebug(`NATIVE init error: ${String(err?.message || err)}`);
+          console.error(err);
+          queueNativeRestart(900);
+        }
+      }
+
+      async function restartNativeRecognition() {
+        const NativeSpeech = getNativeSpeech();
+        if (!NativeSpeech) return;
+        if (nativeStarting) return;
+        nativeStarting = true;
+        try {
+          await NativeSpeech.stop();
+        } catch {}
+        try {
+          // Android WebView에서 partial 모드가 멈추는 기기들이 있어 popup 모드 고정.
+          state.nativeMode = "popup";
+          const usePopup = true;
+          setDebug("NATIVE start(popup)...");
+          const startResult = await NativeSpeech.start({
+            language: "ko-KR",
+            maxResults: 1,
+            prompt: "명령을 말하세요",
+            partialResults: false,
+            popup: usePopup
+          });
+          const first = Array.isArray(startResult?.matches) ? startResult.matches[0] : "";
+          if (first) {
+            if (nativeStartWatchdog) { clearTimeout(nativeStartWatchdog); nativeStartWatchdog = null; }
+            state.heardText = normalizeSpeech(first);
+            setDebug(`NATIVE result: ${state.heardText}`);
+            handleVoiceCommand(first, { isFinal: true });
+            if (state.nativeMode === "popup" && state.scene !== "boot") {
+              queueNativeRestart(120);
+            }
+          } else if (state.scene !== "boot" && !state.permissionDenied) {
+            setDebug("NATIVE popup no match -> retry");
+            queueNativeRestart(220);
+          }
+          state.recognitionActive = true;
+        } catch (err) {
+          state.recognitionActive = false;
+          setDebug(`NATIVE error: ${String(err?.message || err)}`);
+          if (state.scene !== "boot" && !state.permissionDenied) queueNativeRestart(700);
+        } finally {
+          nativeStarting = false;
+        }
+      }
+
+      function queueNativeRestart(delayMs = 300) {
+        const NativeSpeech = getNativeSpeech();
+        if (!state.usingNativeSpeech || !NativeSpeech) return;
+        if (nativeRestartTimer) clearTimeout(nativeRestartTimer);
+        nativeRestartTimer = setTimeout(() => {
+          nativeRestartTimer = null;
+          restartNativeRecognition();
+        }, delayMs);
+      }
+
+      function ensureNativeRecognitionLoop() {
+        if (!state.usingNativeSpeech) return;
+        if (nativeInitTimer) clearTimeout(nativeInitTimer);
+        const tick = async () => {
+          const plugin = getNativeSpeech();
+          if (!plugin) {
+            setDebug("NATIVE plugin waiting...");
+            nativeInitTimer = setTimeout(tick, 400);
+            return;
+          }
+          try {
+            if (!nativeSpeechReady) await initNativeRecognition();
+            else {
+              const listening = await plugin.isListening?.();
+              const active = !!listening?.listening;
+              state.recognitionActive = active;
+              if (!active && state.scene !== "boot" && !state.permissionDenied) {
+                await restartNativeRecognition();
+              }
+            }
+          } catch (e) {
+            setDebug(`NATIVE loop error: ${String(e?.message || e)}`);
+          }
+          nativeInitTimer = setTimeout(tick, 1200);
+        };
+        tick();
+      }
+
+      function showBootError() {
+        overlay.style.display = "grid";
+        bootStatus.innerHTML = '<span class="danger">마이크 권한이 필요합니다. 브라우저 설정에서 마이크 권한을 허용해주세요.</span>';
+      }
+
+      function startTutorial() {
+        state.scene = "tutorial";
+        overlay.style.display = "none";
+        state.tutorial = { step: 0, stepDone: false, okTextTimer: 0, nextStepTimer: 0 };
+        player.x = W / 2 - 11;
+        bullets.length = 0;
+        setMessage("");
+        speakHint("튜토리얼입니다. 좌부터 순서대로 연습합니다.");
+      }
+
+      function startGame() {
+        state.scene = "playing";
+        overlay.style.display = "none";
+        state.score = 0;
+        state.stage = 1;
+        state.stageTime = 0;
+        state.health = 100;
+        state.nameEntry = { candidate: "", waitingConfirm: false };
+        state.replayPrompt = false;
+        player.x = W / 2 - 11;
+        bullets.length = 0;
+        enemies.length = 0;
+        bombs.length = 0;
+        state.transition = { phase: "start", timer: 2, clearStage: 0 };
+        state.playPausedSec = 2;
+        setMessage("");
+        speakHint("스테이지 1 시작");
+      }
+
+      function openSettings() {
+        state.scene = "settings";
+        clearSettingsEdit();
+        setMessage("설정: 좌·우·발사 중 바꿀 항목을 말하세요. 전체 종료도 '확인'.");
+        speakHint("설정 메뉴입니다. 좌 우 발사를 말해 바꿀 항목을 고르세요.");
+      }
+
+      function closeSettings() {
+        state.scene = "playing";
+        clearSettingsEdit();
+        setMessage("설정 종료. 게임 복귀.");
+      }
+
+      function gameOver() {
+        state.scene = "gameover";
+        state.replayPrompt = false;
+        setMessage(`게임 오버! 점수 ${state.score}. 이름을 말해 저장하세요.`);
+        speakHint("게임 오버. 이름을 말하면 점수를 저장할 수 있습니다.");
+      }
+
+      function spawnEnemy() {
+        const ufosUnlocked = state.stage >= 3;
+        const isUfo = ufosUnlocked && Math.random() < 0.35;
+        enemies.push({
+          type: isUfo ? "ufo" : "asteroid",
+          x: 8 + Math.random() * (W - 26),
+          y: -24,
+          w: isUfo ? 20 : 18,
+          h: isUfo ? 14 : 18,
+          hp: isUfo ? 2 + Math.floor(state.stage / 2) : 1,
+          vy: (isUfo ? 1.3 : 1.1) + state.stage * 0.26 + Math.random() * 0.6,
+          t: 0
+        });
+      }
+
+      function fireBullet() {
+        const inPlayableScene = state.scene === "playing" || state.scene === "tutorial";
+        if (player.cooldown > 0 || !inPlayableScene) return;
+        bullets.push({ x: player.x + player.w / 2 - 1.5, y: player.y - 6, w: 3, h: 8, vy: 7.5 });
+        player.cooldown = 12;
+      }
+
+      function hit(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      }
+
+      function movePlayerByStep(dir) {
+        const amount = 28;
+        if (dir === "left") player.x = Math.max(4, player.x - amount);
+        if (dir === "right") player.x = Math.min(W - player.w - 4, player.x + amount);
+      }
+
+      function handleTutorialAction(action) {
+        if (action === "left") movePlayerByStep("left");
+        if (action === "right") movePlayerByStep("right");
+        if (action === "fire") fireBullet();
+        const t = state.tutorial;
+        const expected = TUTORIAL_STEPS[t.step];
+        if (expected === action && !t.stepDone) {
+          t.stepDone = true;
+          t.okTextTimer = 0.9;
+          t.nextStepTimer = 0.9;
+        }
+      }
+
+      function progressTutorial(dt) {
+        const t = state.tutorial;
+        if (t.okTextTimer > 0) t.okTextTimer = Math.max(0, t.okTextTimer - dt);
+        if (t.nextStepTimer > 0) {
+          t.nextStepTimer = Math.max(0, t.nextStepTimer - dt);
+          if (t.nextStepTimer === 0 && t.stepDone) {
+            t.step += 1;
+            t.stepDone = false;
+            if (t.step >= TUTORIAL_STEPS.length) {
+              state.tutorialSeen = true;
+              startGame();
+            }
+          }
+        }
+      }
+
+      function handleVoiceCommand(rawText, opts = {}) {
+        const isFinal = Boolean(opts.isFinal);
+        const text = normalizeSpeech(rawText);
+        if (!text) return;
+        const k = state.keywords;
+
+        if (state.scene !== "boot" && state.scene !== "settings" && matchesAction(text, "settings") && allowVoiceAction("settingsOpen", 500)) {
+          openSettings();
+          return;
+        }
+
+        if (state.scene === "settings") {
+          const inEdit = state.settingsEditSlot != null;
+
+          if (inEdit) {
+            if (matchesAction(text, "no") && isFinal && allowVoiceAction("settingsEditNo", 280)) {
+              if (state.settingsEditStage === "need_confirm") {
+                state.keywords[state.settingsEditSlot] = state.settingsRevertKeyword;
+                saveKeywords();
+              }
+              clearSettingsEdit();
+              setMessage("항목 변경 취소.");
+              return;
+            }
+
+            if (hasKeyword(text, "확인") && isFinal && allowVoiceAction("settingsEditConfirm", 320)) {
+              if (state.settingsEditStage === "need_confirm") {
+                clearSettingsEdit();
+                setMessage("이 항목 설정 완료. 다른 항목을 바꾸려면 좌·우·발사를 말하세요.");
+                return;
+              }
+              clearSettingsEdit();
+              setMessage("새 단어 없이 취소됨.");
+              return;
+            }
+
+            if (state.settingsEditStage === "need_word" && !isFinal) {
+              state.settingsPreviewText = text.slice(0, 8);
+              return;
+            }
+
+            if (!isFinal) return;
+
+            if (state.settingsEditStage === "need_word") {
+              const rawNew = text.slice(0, 8).trim();
+              if (RESERVED_FOR_MOVE_SLOTS.has(rawNew)) {
+                setMessage(`"${rawNew}"는 키워드로 쓸 수 없습니다. 다른 단어를 말해주세요.`);
+                return;
+              }
+              state.settingsPreviewText = rawNew.slice(0, 6);
+              state.keywords[state.settingsEditSlot] = state.settingsPreviewText;
+              saveKeywords();
+              state.settingsEditStage = "need_confirm";
+              setMessage(`${slotDisplayLabel(state.settingsEditSlot)} → "${state.settingsPreviewText}" 적용(점멸 유지). '확인'으로 이 항목 끝.`);
+              return;
+            }
+
+            if (state.settingsEditStage === "need_confirm") {
+              const rawNew = text.slice(0, 8).trim();
+              if (RESERVED_FOR_MOVE_SLOTS.has(rawNew)) {
+                setMessage(`"${rawNew}"는 키워드로 쓸 수 없습니다.`);
+                return;
+              }
+              state.settingsPreviewText = rawNew.slice(0, 6);
+              state.keywords[state.settingsEditSlot] = state.settingsPreviewText;
+              saveKeywords();
+              setMessage(`${slotDisplayLabel(state.settingsEditSlot)} → "${state.settingsPreviewText}" 로 다시 적용. '확인'으로 끝.`);
+              return;
+            }
+            return;
+          }
+
+          if (hasKeyword(text, "확인") && isFinal && allowVoiceAction("settingsCloseAll", 320)) {
+            closeSettings();
+            return;
+          }
+          if (matchesAction(text, "left") && allowVoiceAction("settingsPickLeft", 220)) {
+            startSettingsEdit("left");
+            return;
+          }
+          if (matchesAction(text, "right") && allowVoiceAction("settingsPickRight", 220)) {
+            startSettingsEdit("right");
+            return;
+          }
+          if (matchesAction(text, "fire") && allowVoiceAction("settingsPickFire", 220)) {
+            startSettingsEdit("fire");
+            return;
+          }
+          if (matchesAction(text, "no") && isFinal && allowVoiceAction("settingsClose", 300)) {
+            closeSettings();
+            return;
+          }
+          return;
+        }
+
+        if (state.scene === "tutorial") {
+          if (matchesAction(text, "left") && allowVoiceAction("tutorialLeft", 120)) handleTutorialAction("left");
+          if (matchesAction(text, "right") && allowVoiceAction("tutorialRight", 120)) handleTutorialAction("right");
+          if (matchesAction(text, "fire") && allowVoiceAction("tutorialFire", 120)) handleTutorialAction("fire");
+          return;
+        }
+
+        if (state.scene === "nameEntry" || state.scene === "gameover") {
+          if (!isFinal) return;
+          if (state.replayPrompt) {
+            if (matchesAction(text, "yes")) {
+              setMessage("다시 시작합니다.");
+              speakHint("다시 시작합니다.");
+              setTimeout(startGame, 500);
+              return;
+            }
+            if (matchesAction(text, "no")) {
+              state.scene = "boot";
+              overlay.style.display = "grid";
+              setMessage("");
+              bootStatus.textContent = "시작하기를 누르면 게임을 시작합니다.";
+              speakHint("게임을 종료합니다.");
+              return;
+            }
+            return;
+          }
+          if (!state.nameEntry.waitingConfirm) {
+            state.nameEntry.candidate = text.slice(0, 8);
+            state.nameEntry.waitingConfirm = true;
+            setMessage(`이름 "${state.nameEntry.candidate}"로 저장할까요? "${k.yes}" 또는 "${k.no}"`);
+            return;
+          }
+          if (matchesAction(text, "yes")) {
+            saveScore(state.nameEntry.candidate || "익명", state.score);
+            state.replayPrompt = true;
+            state.nameEntry.waitingConfirm = false;
+            setMessage("기록 저장 완료! 다시 플레이할까요? \"예\" 또는 \"아니오\"");
+            speakHint("기록 저장 완료. 다시 플레이할까요?");
+            return;
+          }
+          if (matchesAction(text, "no")) {
+            state.replayPrompt = true;
+            state.nameEntry.waitingConfirm = false;
+            setMessage("다시 플레이할까요? \"예\" 또는 \"아니오\"");
+            speakHint("다시 플레이할까요?");
+            return;
+          }
+        }
+
+        if (state.scene !== "playing") return;
+        const leftPos = lastActionPos(text, "left");
+        const rightPos = lastActionPos(text, "right");
+        if ((leftPos >= 0 || rightPos >= 0) && allowVoiceAction("playerMove", 90)) {
+          if (leftPos > rightPos) movePlayerByStep("left");
+          else movePlayerByStep("right");
+        }
+        if (matchesAction(text, "fire") && allowVoiceAction("playerFire", 85)) fireBullet();
+      }
+
+      function update(dt) {
+        stars.forEach(s => {
+          s.y += s.v;
+          if (s.y > H) { s.y = -2; s.x = Math.random() * W; }
+        });
+
+        if (player.cooldown > 0) player.cooldown -= 1;
+        if (player.flash > 0) player.flash -= 1;
+        for (let i = bullets.length - 1; i >= 0; i--) {
+          bullets[i].y -= bullets[i].vy;
+          if (bullets[i].y < -14) bullets.splice(i, 1);
+        }
+
+        if (state.scene === "tutorial") {
+          progressTutorial(dt);
+          return;
+        }
+
+        if (state.scene !== "playing") return;
+        if (state.playPausedSec > 0) {
+          state.playPausedSec = Math.max(0, state.playPausedSec - dt);
+          if (state.transition.timer > 0) {
+            state.transition.timer = Math.max(0, state.transition.timer - dt);
+            if (state.transition.phase === "clear" && state.transition.timer === 0) {
+              state.transition = { phase: "start", timer: 2, clearStage: 0 };
+              state.playPausedSec = 2;
+            } else if (state.transition.phase === "start" && state.transition.timer === 0) {
+              state.transition = { phase: null, timer: 0, clearStage: 0 };
+            }
+          }
+          return;
+        }
+
+        state.stageTime += dt;
+        const nextStageByTime = Math.min(5, 1 + Math.floor(state.stageTime / 20));
+        if (nextStageByTime > state.stage) {
+          const cleared = state.stage;
+          state.stage = nextStageByTime;
+          state.transition = { phase: "clear", timer: 1.2, clearStage: cleared };
+          state.playPausedSec = 1.2;
+          return;
+        }
+
+        const spawnDelay = Math.max(0.24, 0.95 - state.stage * 0.11);
+        if (Math.random() < dt / spawnDelay) spawnEnemy();
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+          const e = enemies[i];
+          e.y += e.vy;
+          e.t += dt;
+          if (e.type === "ufo") {
+            e.x += Math.sin(e.t * 3) * 1.2;
+            if (Math.random() < dt * (0.22 + state.stage * 0.02)) {
+              bombs.push({ x: e.x + e.w / 2 - 2, y: e.y + e.h, w: 4, h: 8, vy: 2.5 + state.stage * 0.2 });
+            }
+          }
+          if (e.y > H + 20) enemies.splice(i, 1);
+        }
+
+        for (let i = bombs.length - 1; i >= 0; i--) {
+          bombs[i].y += bombs[i].vy;
+          if (bombs[i].y > H + 8) bombs.splice(i, 1);
+        }
+
+        for (let i = bullets.length - 1; i >= 0; i--) {
+          for (let j = enemies.length - 1; j >= 0; j--) {
+            if (hit(bullets[i], enemies[j])) {
+              bullets.splice(i, 1);
+              enemies[j].hp -= 1;
+              if (enemies[j].hp <= 0) {
+                state.score += enemies[j].type === "ufo" ? 35 : 12;
+                enemies.splice(j, 1);
+              }
+              break;
+            }
+          }
+        }
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+          if (hit(player, enemies[i])) {
+            enemies.splice(i, 1);
+            state.health -= 15;
+            player.flash = 8;
+          }
+        }
+        for (let i = bombs.length - 1; i >= 0; i--) {
+          if (hit(player, bombs[i])) {
+            bombs.splice(i, 1);
+            state.health -= 11;
+            player.flash = 8;
+          }
+        }
+
+        if (state.health <= 0) {
+          state.health = 0;
+          state.scene = "nameEntry";
+          gameOver();
+        }
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = "#050914";
+        ctx.fillRect(0, 0, W, H);
+        for (const s of stars) {
+          ctx.fillStyle = s.s > 2 ? "#b7e8ff" : "#7ea8ff";
+          ctx.fillRect(s.x, s.y, s.s, s.s);
+        }
+      }
+
+      function drawPlayer() {
+        const x = Math.round(player.x), y = Math.round(player.y);
+        ctx.fillStyle = player.flash ? "#ff9a9a" : "#6fe4ff";
+        ctx.fillRect(x + 9, y, 4, 5);
+        ctx.fillRect(x + 6, y + 5, 10, 6);
+        ctx.fillRect(x + 2, y + 11, 18, 5);
+        ctx.fillRect(x, y + 16, 22, 6);
+        ctx.fillStyle = "#152542";
+        ctx.fillRect(x + 9, y + 8, 4, 3);
+      }
+
+      function drawEnemy(e) {
+        const x = Math.round(e.x), y = Math.round(e.y);
+        if (e.type === "asteroid") {
+          ctx.fillStyle = "#a9a3b2";
+          ctx.fillRect(x, y, 18, 18);
+          ctx.fillStyle = "#6f6977";
+          ctx.fillRect(x + 4, y + 3, 4, 3);
+          ctx.fillRect(x + 10, y + 9, 3, 3);
+        } else {
+          ctx.fillStyle = "#8fffd2";
+          ctx.fillRect(x + 2, y, 16, 6);
+          ctx.fillRect(x, y + 5, 20, 6);
+          ctx.fillStyle = "#203048";
+          ctx.fillRect(x + 6, y + 4, 8, 3);
+        }
+      }
+
+      function drawHud() {
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(8, 8, W - 16, 44);
+        ctx.strokeStyle = "rgba(95,196,255,0.6)";
+        ctx.strokeRect(8, 8, W - 16, 44);
+        ctx.fillStyle = "#d7f4ff";
+        ctx.font = "12px sans-serif";
+        ctx.fillText(`SCORE ${state.score}`, 16, 25);
+        ctx.fillText(`STAGE ${state.stage}/5`, 16, 43);
+        ctx.fillText(`HP ${state.health}`, W - 95, 25);
+        ctx.fillStyle = "#ff6b6b";
+        ctx.fillRect(W - 95, 30, 78, 8);
+        ctx.fillStyle = "#6effa8";
+        ctx.fillRect(W - 95, 30, Math.max(0, 78 * (state.health / 100)), 8);
+      }
+
+      function drawFloatingHints(lines, startY = 54) {
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "left";
+        lines.forEach((line, i) => {
+          const y = startY + i * 14;
+          const t = line.length > 52 ? `${line.slice(0, 49)}…` : line;
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.fillText(t, 15, y + 1);
+          ctx.fillStyle = "#e8f6ff";
+          ctx.fillText(t, 14, y);
+        });
+      }
+
+      function drawTutorialCenter(lines) {
+        const boxW = 318;
+        const boxH = 116;
+        const x = Math.floor((W - boxW) / 2);
+        const y = Math.floor((H - boxH) / 2);
+        ctx.fillStyle = "rgba(3,10,28,0.82)";
+        ctx.fillRect(x, y, boxW, boxH);
+        ctx.strokeStyle = "rgba(95,196,255,0.85)";
+        ctx.strokeRect(x, y, boxW, boxH);
+        ctx.textAlign = "left";
+        ctx.font = "12px sans-serif";
+        lines.forEach((line, i) => {
+          const ty = y + 22 + i * 18;
+          const t = line.length > 44 ? `${line.slice(0, 43)}…` : line;
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.fillText(t, x + 15, ty + 1);
+          ctx.fillStyle = i === 0 ? "#ffe66d" : "#e8f6ff";
+          ctx.fillText(t, x + 14, ty);
+        });
+      }
+
+      function drawCenterNotice(text) {
+        const boxW = 220;
+        const boxH = 52;
+        const x = Math.floor((W - boxW) / 2);
+        const y = Math.floor((H - boxH) / 2);
+        ctx.fillStyle = "rgba(3,10,28,0.82)";
+        ctx.fillRect(x, y, boxW, boxH);
+        ctx.strokeStyle = "rgba(95,196,255,0.9)";
+        ctx.strokeRect(x, y, boxW, boxH);
+        ctx.textAlign = "center";
+        ctx.font = "14px sans-serif";
+        ctx.fillStyle = "#ffe66d";
+        ctx.fillText(text, x + boxW / 2, y + 31);
+      }
+
+      function buildSettingsLines() {
+        const k = state.keywords;
+        const labelMap = { left: "왼쪽", right: "오른쪽", fire: "뿅", "설정닫기": "종료" };
+        const isBlinkOn = Math.floor(performance.now() / 220) % 2 === 0;
+        return state.settingsItems.map((it) => {
+          const label = labelMap[it];
+          const cur = it === "설정닫기" ? SETTINGS_EXIT_DISPLAY : k[it];
+          const editing = state.settingsBlinkKey === it && it !== "설정닫기" && state.settingsEditSlot != null;
+          let shown = cur;
+          if (editing) {
+            if (state.settingsEditStage === "need_word") {
+              shown = !isBlinkOn ? "…" : (state.settingsPreviewText || cur);
+            } else if (state.settingsEditStage === "need_confirm") {
+              shown = !isBlinkOn ? "…" : cur;
+            }
+          }
+          return `${label}: ${shown}`;
+        });
+      }
+
+      function drawLeaderboard(x, yStart) {
+        ctx.textAlign = "left";
+        ctx.font = "10px sans-serif";
+        ctx.fillStyle = "#bce9ff";
+        ctx.fillText("TOP", x, yStart);
+        state.leaderboard.slice(0, 5).forEach((row, idx) => {
+          ctx.fillStyle = "#d7f4ff";
+          ctx.fillText(`${idx + 1}.${row.name} ${row.score}`, x, yStart + 13 + idx * 13);
+        });
+      }
+
+      function render() {
+        drawBackground();
+        bullets.forEach(b => {
+          ctx.fillStyle = "#ffe66d";
+          ctx.fillRect(Math.round(b.x), Math.round(b.y), b.w, b.h);
+        });
+        enemies.forEach(drawEnemy);
+        bombs.forEach(b => {
+          ctx.fillStyle = "#ff934f";
+          ctx.fillRect(Math.round(b.x), Math.round(b.y), b.w, b.h);
+        });
+        drawPlayer();
+        drawHud();
+
+        if (state.scene === "tutorial") {
+          const k = state.keywords;
+          const t = state.tutorial;
+          const expected = TUTORIAL_STEPS[t.step];
+          const stepPrompt = {
+            left: `좌측 이동 시 "${k.left}"라고 말씀하세요.`,
+            right: `우측 이동 시 "${k.right}"라고 말씀하세요.`,
+            fire: `미사일 발사 시 "${k.fire}"라고 말씀하세요.`
+          };
+          drawTutorialCenter([
+            "튜토리얼",
+            stepPrompt[expected] || "튜토리얼 완료",
+            t.okTextTimer > 0 ? "인식 오케이" : "인식 대기",
+            `인식: ${state.heardText || "…"}`
+          ]);
+        } else if (state.scene === "settings") {
+          const tail = state.settingsEditSlot
+            ? (state.settingsEditStage === "need_confirm"
+              ? "편집 중 '확인' = 이 항목 저장 완료(점멸 끝)"
+              : "새 단어 인식될 때까지 점멸 → 인식 후에도 점멸 → '확인'으로 저장")
+            : "바꿀 항목: 좌·우·발사 말하기 · 전체 나가기: 확인";
+          drawFloatingHints([
+            ...buildSettingsLines(),
+            `인식 ${state.heardText || "…"}`,
+            tail
+          ], 74);
+        } else if (state.scene === "nameEntry" || state.scene === "gameover") {
+          drawFloatingHints([
+            `GAME OVER  점수 ${state.score}`,
+            state.nameEntry.waitingConfirm
+              ? `저장? ${state.nameEntry.candidate}  (${state.keywords.yes}/${state.keywords.no})`
+              : (state.replayPrompt ? "다시 플레이? → 예/아니오" : "이름 말하기 → 예/아니오"),
+            `인식 ${state.heardText || "…"}`
+          ], 74);
+          drawLeaderboard(W - 118, 102);
+          if (state.replayPrompt) {
+            drawCenterNotice("다시 플레이할까요? (예/아니오)");
+          }
+        } else {
+          const k = state.keywords;
+          drawFloatingHints([
+            `좌:${k.left} 우:${k.right} 발사:${k.fire}  (기본 ${DEFAULT_KEYWORDS.left}/${DEFAULT_KEYWORDS.right}/${DEFAULT_KEYWORDS.fire})`,
+            `설정:${k.settings} 라고 말하면 설정 메뉴  ·  음성:${state.recognitionActive ? "ON" : "…"}`
+          ], 74);
+        }
+
+        if (state.debugText) {
+          ctx.fillStyle = "#7fffd4";
+          ctx.font = "10px monospace";
+          ctx.fillText(state.debugText.slice(0, 48), 12, H - 36);
+        }
+
+        if (state.scene === "playing" && state.transition.phase) {
+          const text = state.transition.phase === "clear"
+            ? `${state.transition.clearStage} 스테이지 통과!`
+            : `스테이지 ${state.stage} 스타트`;
+          drawCenterNotice(text);
+        }
+
+        if (state.message && state.scene !== "tutorial") {
+          ctx.fillStyle = "#ffe66d";
+          ctx.font = "11px sans-serif";
+          const msg = state.message;
+          ctx.fillText(msg.slice(0, 54), 14, H - 22);
+          if (msg.length > 54) ctx.fillText(msg.slice(54, 108), 14, H - 10);
+        }
+      }
+
+      function loop(now) {
+        const dt = Math.min(0.05, (now - lastTime) / 1000);
+        lastTime = now;
+        update(dt);
+        render();
+        requestAnimationFrame(loop);
+      }
+
+      startBtn.addEventListener("click", async () => {
+        const hasAndroidBridge = !!getAndroidVoice()?.isAvailable?.();
+        const hasNative = !!getNativeSpeech();
+        const hasWeb = !!SpeechRecognition;
+        if (!hasAndroidBridge && !hasNative && !hasWeb) {
+          bootStatus.innerHTML = '<span class="danger">이 브라우저는 음성 인식(SpeechRecognition)을 지원하지 않습니다. 최신 Chrome 또는 iOS Safari를 사용해주세요.</span>';
+          return;
+        }
+        await requestMicPermission();
+      });
+
+      if (!getAndroidVoice()?.isAvailable?.() && !getNativeSpeech() && state.unsupported) {
+        bootStatus.innerHTML = '<span class="danger">이 브라우저는 음성 인식(SpeechRecognition)을 지원하지 않습니다. 최신 Chrome 또는 iOS Safari를 사용해주세요.</span>';
+      }
+
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
