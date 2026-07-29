@@ -44,4 +44,4 @@ GitHub `Issues` 탭에 편하게 제안해 주시거나 자유롭게 참여해 �
 이 프로젝트는 아래의 자랑스러운 기여자들에 의해 발전해 나가고 있습니다:
 
 - **DonAzure**: 프로젝트 기획, 핵심 디렉팅 및 아이디어 제공
-- **Antigravity** (Google Deepmind AI): 프로젝트 아키텍처 재설계, HTML5 전환 및 Web Speech API 최적화 담당
+- **Cursor**: 프로젝트 아키텍처 재설계, HTML5 전환 및 Web Speech API 최적화 담당
