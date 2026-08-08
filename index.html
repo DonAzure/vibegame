@@ -519,7 +519,8 @@
           text: "",
           left: 0,
           right: 0,
-          fire: 0
+          fire: 0,
+          at: 0
         },
         pendingFire: false,
 
@@ -719,6 +720,31 @@
         );
       }
 
+      function repeatedMoveFireAlternative(primary, alternatives, resultIndex) {
+        const fireAlternative = alternatives.slice(1).find(candidate =>
+          matchesExactAction(candidate, "fire")
+        );
+        if (!fireAlternative) return "";
+
+        const direction = matchesExactAction(primary, "left")
+          ? "left"
+          : (matchesExactAction(primary, "right") ? "right" : "");
+        if (!direction) return "";
+
+        const previous = state.voiceResultProgress;
+        const otherDirection = direction === "left" ? "right" : "left";
+        const isAdjacentResult = resultIndex >= previous.resultIndex &&
+          resultIndex <= previous.resultIndex + 1;
+        const isRecent = performance.now() - previous.at <= 2000;
+        const repeatsMoveOnly = previous[direction] > 0 &&
+          previous[otherDirection] === 0 && previous.fire === 0;
+
+        return previous.session === recognitionSession &&
+          isAdjacentResult && isRecent && repeatsMoveOnly
+          ? fireAlternative
+          : "";
+      }
+
 
       function isSpokenHintEcho(text) {
         const normalized = normalizeSpeech(text);
@@ -819,7 +845,8 @@
             text: "",
             left: 0,
             right: 0,
-            fire: 0
+            fire: 0,
+            at: 0
           };
           recognitionSpeechScene = state.scene;
           recognitionSpeechActive = false;
@@ -892,9 +919,10 @@
                state.nameEntry.phase === "replayConfirm");
             let text = alternatives[0];
             if (inPlayableScene) {
-              text = hasStrongGameplayCommand(alternatives[0])
-                ? alternatives[0]
-                : alternatives.slice(1).find(isExactGameplayCommand);
+              text = repeatedMoveFireAlternative(alternatives[0], alternatives, i) ||
+                (hasStrongGameplayCommand(alternatives[0])
+                  ? alternatives[0]
+                  : alternatives.slice(1).find(isExactGameplayCommand));
 
               if (!text) {
                 state.heardText = normalizeSpeech(alternatives[0]);
@@ -1006,7 +1034,8 @@
           text: "",
           left: 0,
           right: 0,
-          fire: 0
+          fire: 0,
+          at: 0
         };
         voiceCooldownAt.clear();
 
@@ -1327,7 +1356,8 @@
               text: normalizedText,
               left: leftCount,
               right: rightCount,
-              fire: fireCount
+              fire: fireCount,
+              at: performance.now()
             };
           }
         }
