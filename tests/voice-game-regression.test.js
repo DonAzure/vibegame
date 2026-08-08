@@ -166,22 +166,28 @@ test("final name saves the score immediately exactly once", () => {
   assert.equal(api.state.replayPrompt, true);
 });
 
-test("a delayed gameplay command cannot consume the game-over name slot", () => {
+test("a delayed gameplay result cannot consume the game-over name slot", () => {
   const { api, storage } = loadGame();
-  api.state.scene = "gameover";
+  api.state.scene = "playing";
   api.state.score = 99;
-  api.state.nameEntry = { candidate: "", waitingConfirm: false };
-  api.state.replayPrompt = false;
+  api.initRecognition();
 
-  api.handleVoiceCommand("뿅", {
-    isFinal: true,
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  api.gameOver();
+  recognition.onresult({
     resultIndex: 0,
-    speechScene: "playing",
+    results: [{ 0: { transcript: "뿅" }, isFinal: true }],
   });
-  api.handleVoiceCommand("영희", {
-    isFinal: true,
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+
+  recognition.onspeechstart();
+  recognition.onresult({
     resultIndex: 1,
-    speechScene: "gameover",
+    results: [
+      { 0: { transcript: "뿅" }, isFinal: true },
+      { 0: { transcript: "영희" }, isFinal: true },
+    ],
   });
 
   const scores = JSON.parse(storage.get("voiceShooter.scores.v1") || "[]");
@@ -234,4 +240,31 @@ test("a pop command received during cooldown fires once when ready", () => {
   api.update(0.1);
   assert.equal(api.bullets.length, 1);
   assert.equal(api.bullets[0].lane, 1);
+});
+
+test("an evolving interim transcript does not queue a duplicate shot", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "오른쪽뿅" }, isFinal: false }],
+  });
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 3);
+
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "오른쪽으로뿅" }, isFinal: false }],
+  });
+  api.update(1);
+
+  assert.equal(api.bullets.length, 1);
 });

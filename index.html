@@ -512,6 +512,7 @@
 
         voiceResultIndex: -1,
         processedPosMap: {},
+        pendingFire: false,
 
         leaderboard: loadScores()
       };
@@ -542,6 +543,7 @@
       const voiceCooldownAt = new Map();
       let recognition = null;
       let recognitionRestarting = false;
+      let recognitionSpeechScene = "boot";
       let lastTime = performance.now();
 
       diffBtns.forEach(btn => {
@@ -669,6 +671,26 @@
         return keywordAliases(action).reduce((max, word) => Math.max(max, lastKeywordPos(text, word)), -1);
       }
 
+      function actionMatchCount(text, action) {
+        const normalized = normalizeSpeech(text);
+        const aliases = keywordAliases(action)
+          .map(normalizeSpeech)
+          .filter(Boolean)
+          .sort((a, b) => b.length - a.length);
+        let count = 0;
+
+        for (let i = 0; i < normalized.length;) {
+          const match = aliases.find(word => normalized.startsWith(word, i));
+          if (match) {
+            count += 1;
+            i += match.length;
+          } else {
+            i += 1;
+          }
+        }
+        return count;
+      }
+
       function lastKeywordPos(text, keyword) {
         const t = normalizeSpeech(text);
         const k = normalizeSpeech(keyword);
@@ -727,8 +749,14 @@
         recognition.onstart = () => {
           state.recognitionActive = true;
           state.permissionDenied = false;
+          state.processedPosMap = {};
+          recognitionSpeechScene = state.scene;
           micDot.className = "mic-dot active";
           micStatusText.textContent = "듣는 중...";
+        };
+
+        recognition.onspeechstart = () => {
+          recognitionSpeechScene = speechSynthesis.speaking ? "system" : state.scene;
         };
 
         recognition.onend = () => {
@@ -772,7 +800,11 @@
 
             state.heardText = normalizeSpeech(text);
             heardTextSpan.textContent = `"${state.heardText}"`;
-            handleVoiceCommand(text, { isFinal: latest.isFinal, resultIndex: i });
+            handleVoiceCommand(text, {
+              isFinal: latest.isFinal,
+              resultIndex: i,
+              speechScene: recognitionSpeechScene
+            });
           }
         };
 
@@ -795,7 +827,11 @@
 
       function fireBullet() {
         const inPlayableScene = state.scene === "playing" || state.scene === "tutorial";
-        if (player.cooldown > 0 || !inPlayableScene) return;
+        if (!inPlayableScene) return false;
+        if (player.cooldown > 0) {
+          state.pendingFire = true;
+          return true;
+        }
 
         const curDiff = DIFFICULTY_SETTINGS[state.difficulty] || DIFFICULTY_SETTINGS.easy;
         const targetX = getLaneX(player.lane);
@@ -809,8 +845,10 @@
           vy: 9
         });
 
-        player.cooldown = curDiff.cooldown;
+        player.cooldown = curDiff.cooldown / 60;
+        state.pendingFire = false;
         if (window.soundFx) window.soundFx.playLaser();
+        return true;
       }
 
       function startTutorial() {
@@ -837,8 +875,11 @@
         state.maxHealth = curDiff.maxHp;
         state.nameEntry = { candidate: "", waitingConfirm: false };
         state.replayPrompt = false;
+        state.pendingFire = false;
+        state.processedPosMap = {};
 
         player.lane = 2;
+        player.cooldown = 0;
         player.x = getLaneX(2) - player.w / 2;
         bullets.length = 0;
         enemies.length = 0;
@@ -869,6 +910,7 @@
       function gameOver() {
         state.scene = "gameover";
         state.replayPrompt = false;
+        state.pendingFire = false;
         setMessage(`게임 오버! 점수 ${state.score}. 이름을 말해 저장하세요.`);
         speakHint("게임 오버. 이름을 말하면 점수를 저장할 수 있습니다.");
         if (window.soundFx) window.soundFx.playGameOver();
@@ -909,8 +951,11 @@
       }
 
       function triggerFire() {
-        if (state.scene === "tutorial") handleTutorialAction("fire");
-        else fireBullet();
+        if (state.scene === "tutorial") {
+          handleTutorialAction("fire");
+          return true;
+        }
+        return fireBullet();
       }
 
       function handleVoiceCommand(rawText, opts = {}) {
@@ -1010,6 +1055,10 @@
 
         if (state.scene === "nameEntry" || state.scene === "gameover") {
           if (!isFinal) return;
+
+          const speechScene = opts.speechScene;
+          if (speechScene && speechScene !== "nameEntry" && speechScene !== "gameover") return;
+
           if (state.replayPrompt) {
             if (matchesAction(text, "yes")) {
               setMessage("다시 시작합니다.");
@@ -1027,50 +1076,38 @@
             }
             return;
           }
-          if (!state.nameEntry.waitingConfirm) {
-            state.nameEntry.candidate = text.slice(0, 8);
-            state.nameEntry.waitingConfirm = true;
-            setMessage(`이름 "${state.nameEntry.candidate}"로 저장할까요? "${k.yes}" 또는 "${k.no}"`);
-            return;
-          }
-          if (matchesAction(text, "yes")) {
-            saveScore(state.nameEntry.candidate || "익명", state.score);
-            state.replayPrompt = true;
-            state.nameEntry.waitingConfirm = false;
-            setMessage("기록 저장 완료! 다시 플레이할까요? \"예\" 또는 \"아니오\"");
-            speakHint("기록 저장 완료. 다시 플레이할까요?");
-            return;
-          }
-          if (matchesAction(text, "no")) {
-            state.replayPrompt = true;
-            state.nameEntry.waitingConfirm = false;
-            setMessage("다시 플레이할까요? \"예\" 또는 \"아니오\"");
-            speakHint("다시 플레이할까요?");
-            return;
-          }
+
+          state.nameEntry.candidate = text.slice(0, 8);
+          saveScore(state.nameEntry.candidate || "익명", state.score);
+          state.replayPrompt = true;
+          state.nameEntry.waitingConfirm = false;
+          setMessage(`"${state.nameEntry.candidate}" 이름으로 기록 저장 완료! 다시 플레이할까요? "예" 또는 "아니오"`);
+          speakHint("기록 저장 완료. 다시 플레이할까요?");
+          return;
         }
 
         if (!state.processedPosMap[opts.resultIndex]) {
-          state.processedPosMap[opts.resultIndex] = { left: -1, right: -1, fire: -1, settings: -1 };
+          state.processedPosMap[opts.resultIndex] = { left: 0, right: 0, fire: 0, settings: 0 };
         }
         const pos = state.processedPosMap[opts.resultIndex];
 
         if (state.scene === "tutorial" || state.scene === "playing") {
+          const leftCount = actionMatchCount(text, "left");
+          const rightCount = actionMatchCount(text, "right");
+          const fireCount = actionMatchCount(text, "fire");
           const leftPos = lastActionPos(text, "left");
           const rightPos = lastActionPos(text, "right");
-          const firePos = lastActionPos(text, "fire");
 
-          if (leftPos > pos.left && leftPos >= rightPos) {
+          if (leftCount > pos.left && leftPos >= rightPos) {
             triggerMove("left");
-            pos.left = leftPos;
-          } else if (rightPos > pos.right && rightPos > leftPos) {
+          } else if (rightCount > pos.right && rightPos > leftPos) {
             triggerMove("right");
-            pos.right = rightPos;
           }
-          
-          if (firePos > pos.fire) {
-            triggerFire();
-            pos.fire = firePos;
+          pos.left = Math.max(pos.left, leftCount);
+          pos.right = Math.max(pos.right, rightCount);
+
+          if (fireCount > pos.fire && triggerFire()) {
+            pos.fire = fireCount;
           }
         }
       }
@@ -1126,7 +1163,11 @@
         const targetPlayerX = getLaneX(player.lane) - player.w / 2;
         player.x += (targetPlayerX - player.x) * 0.35;
 
-        if (player.cooldown > 0) player.cooldown -= 1;
+        if (player.cooldown > 0) player.cooldown = Math.max(0, player.cooldown - dt);
+        if (state.pendingFire && player.cooldown === 0 &&
+            (state.scene === "playing" || state.scene === "tutorial")) {
+          fireBullet();
+        }
         if (player.flash > 0) player.flash -= 1;
 
         for (let i = bullets.length - 1; i >= 0; i--) {
@@ -1474,7 +1515,7 @@
             `GAME OVER  점수 ${state.score}`,
             state.nameEntry.waitingConfirm
               ? `저장? ${state.nameEntry.candidate}  (${state.keywords.yes}/${state.keywords.no})`
-              : (state.replayPrompt ? "다시 플레이? → 예/아니오" : "이름 말하기 → 예/아니오"),
+              : (state.replayPrompt ? "다시 플레이? → 예/아니오" : "이름 말하기 → 즉시 저장"),
             `인식 ${state.heardText || "…"}`
           ], 96);
           drawLeaderboard(W - 118, 115);
