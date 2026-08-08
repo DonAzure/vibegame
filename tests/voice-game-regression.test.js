@@ -457,6 +457,56 @@ test("replay confirmation accepts an exact lower yes alternative", () => {
   assert.match(api.state.message, /다시 시작/);
 });
 
+for (const spokenNo of ["아니오", "아니요"]) {
+  test(`replay confirmation exits to boot for ${spokenNo}`, () => {
+    const { api } = loadGame();
+    api.state.scene = "gameover";
+    api.state.nameEntry.phase = "replayConfirm";
+    api.state.nameCaptureReady = true;
+    api.state.replayPrompt = true;
+    api.initRecognition();
+
+    const recognition = api.getRecognition();
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, spokenNo, 0);
+
+    assert.equal(api.state.scene, "boot");
+    assert.equal(api.state.nameCaptureReady, false);
+  });
+}
+for (const spokenNo of ["아니오", "아니요"]) {
+  test(`replay confirmation exits immediately for interim exact ${spokenNo}`, () => {
+    const { api } = loadGame();
+    api.state.scene = "gameover";
+    api.state.nameEntry.phase = "replayConfirm";
+    api.state.nameCaptureReady = true;
+    api.state.replayPrompt = true;
+    api.initRecognition();
+
+    const recognition = api.getRecognition();
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, spokenNo, 0, false);
+
+    assert.equal(api.state.scene, "boot");
+    assert.equal(api.state.nameCaptureReady, false);
+  });
+}
+
+test("replay confirmation does not exit for a longer interim no-like phrase", () => {
+  const { api } = loadGame();
+  api.state.scene = "gameover";
+  api.state.nameEntry.phase = "replayConfirm";
+  api.state.nameCaptureReady = true;
+  api.state.replayPrompt = true;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "아니오세요", 0, false);
+
+  assert.equal(api.state.scene, "gameover");
+  assert.equal(api.state.nameCaptureReady, true);
+});
 test("a fresh fire-sounding name is saved after the player explicitly chose save", () => {
   const { api, speechSynthesis, storage } = loadGame();
   api.state.scene = "playing";
@@ -748,6 +798,25 @@ test("a fresh alternative set keeps its strong top right command", () => {
 
   assert.equal(api.player.lane, 3);
   assert.equal(api.bullets.length, 0);
+});
+test("an immediate top-only repeated right result falls back to firing", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 3);
+
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 1);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 3);
 });
 test("a lower speech-recognition alternative matching pop fires once in the current lane", () => {
   const { api } = loadGame();
