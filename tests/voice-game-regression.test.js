@@ -566,6 +566,43 @@ test("a repeated right prefix moves once and the following pop fires once", () =
   assert.equal(api.bullets.length, 1);
   assert.equal(api.bullets[0].lane, 3);
 });
+test("separate final pop results in one speech segment each fire", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+
+  emitRecognitionResult(recognition, "뿅", 0);
+  assert.equal(api.bullets.length, 1);
+  api.update(1);
+
+  emitRecognitionResult(recognition, "뿅", 1);
+  assert.equal(api.bullets.length, 2);
+  api.update(1);
+
+  emitRecognitionResult(recognition, "뿅", 2);
+  assert.equal(api.bullets.length, 3);
+  assert.deepEqual(api.bullets.map((bullet) => bullet.lane), [2, 2, 2]);
+});
+
+test("separate final right results in one speech segment each move once", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 1;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 2);
+
+  emitRecognitionResult(recognition, "오른쪽", 1);
+  assert.equal(api.player.lane, 3);
+});
 test("a delayed expansion in the same speech segment does not repeat its right move", () => {
   const { api, clock } = loadGame();
   api.state.scene = "playing";
