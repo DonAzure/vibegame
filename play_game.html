@@ -544,6 +544,8 @@
       let recognition = null;
       let recognitionRestarting = false;
       let recognitionSpeechScene = "boot";
+      let recognitionSpeechActive = false;
+      let lastSpokenHintText = "";
       let lastTime = performance.now();
 
       diffBtns.forEach(btn => {
@@ -628,6 +630,7 @@
       }
 
       function speakHint(text) {
+        lastSpokenHintText = normalizeSpeech(text);
         if (!("speechSynthesis" in window)) return;
         try {
           const u = new SpeechSynthesisUtterance(text);
@@ -665,6 +668,15 @@
 
       function matchesAction(text, action) {
         return keywordAliases(action).some((word) => hasKeyword(text, word));
+      }
+
+      function isSpokenHintEcho(text) {
+        const normalized = normalizeSpeech(text);
+        if (!normalized || !lastSpokenHintText) return false;
+        if (normalized === lastSpokenHintText) return true;
+        return normalized.length >= 2 && (
+          lastSpokenHintText.includes(normalized) || normalized.includes(lastSpokenHintText)
+        );
       }
 
       function lastActionPos(text, action) {
@@ -751,16 +763,20 @@
           state.permissionDenied = false;
           state.processedPosMap = {};
           recognitionSpeechScene = state.scene;
+          recognitionSpeechActive = false;
           micDot.className = "mic-dot active";
           micStatusText.textContent = "듣는 중...";
         };
 
         recognition.onspeechstart = () => {
           recognitionSpeechScene = speechSynthesis.speaking ? "system" : state.scene;
+          recognitionSpeechActive = true;
         };
 
         recognition.onend = () => {
           state.recognitionActive = false;
+          recognitionSpeechActive = false;
+          recognitionSpeechScene = state.scene;
           micDot.className = "mic-dot";
           micStatusText.textContent = "마이크 멈춤";
 
@@ -774,6 +790,8 @@
         };
 
         recognition.onerror = (e) => {
+          recognitionSpeechActive = false;
+          recognitionSpeechScene = state.scene;
           if (e.error === "not-allowed" || e.error === "service-not-allowed") {
             state.permissionDenied = true;
             micDot.className = "mic-dot";
@@ -800,11 +818,16 @@
 
             state.heardText = normalizeSpeech(text);
             heardTextSpan.textContent = `"${state.heardText}"`;
+            const speechScene = recognitionSpeechScene;
             handleVoiceCommand(text, {
               isFinal: latest.isFinal,
               resultIndex: i,
-              speechScene: recognitionSpeechScene
+              speechScene
             });
+            if (latest.isFinal) {
+              recognitionSpeechActive = false;
+              recognitionSpeechScene = state.scene;
+            }
           }
         };
 
@@ -909,6 +932,7 @@
 
       function gameOver() {
         state.scene = "gameover";
+        if (!recognitionSpeechActive) recognitionSpeechScene = state.scene;
         state.replayPrompt = false;
         state.pendingFire = false;
         setMessage(`게임 오버! 점수 ${state.score}. 이름을 말해 저장하세요.`);
@@ -1056,9 +1080,6 @@
         if (state.scene === "nameEntry" || state.scene === "gameover") {
           if (!isFinal) return;
 
-          const speechScene = opts.speechScene;
-          if (speechScene && speechScene !== "nameEntry" && speechScene !== "gameover") return;
-
           if (state.replayPrompt) {
             if (matchesAction(text, "yes")) {
               setMessage("다시 시작합니다.");
@@ -1074,6 +1095,13 @@
               speakHint("게임을 종료합니다.");
               return;
             }
+            return;
+          }
+
+          const speechScene = opts.speechScene;
+          if (speechScene === "system") {
+            if (isSpokenHintEcho(text)) return;
+          } else if (speechScene && speechScene !== "nameEntry" && speechScene !== "gameover") {
             return;
           }
 
