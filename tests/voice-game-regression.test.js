@@ -752,7 +752,7 @@ test("a new speech segment can repeat the same right command after the fallback 
   assert.equal(api.player.lane, 4);
 });
 
-test("two explicit right commands in one result move two lanes", () => {
+test("repeated right words in one result move one lane", () => {
   const { api, clock } = loadGame();
   api.state.scene = "playing";
   api.player.lane = 1;
@@ -763,7 +763,35 @@ test("two explicit right commands in one result move two lanes", () => {
   recognition.onspeechstart();
   emitRecognitionResult(recognition, "오른쪽 오른쪽", 0);
 
-  assert.equal(api.player.lane, 3);
+  assert.equal(api.player.lane, 2);
+});
+test("repeated right words in one tutorial result move one lane", () => {
+  const { api } = loadGame();
+  api.state.scene = "tutorial";
+  api.state.tutorial.step = 1;
+  api.player.lane = 1;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽 오른쪽", 0);
+
+  assert.equal(api.player.lane, 2);
+});
+
+test("an interim right followed by repeated final right words moves one lane total", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 1;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0, false);
+  assert.equal(api.player.lane, 2);
+
+  emitRecognitionResult(recognition, "오른쪽 오른쪽", 0, true);
+  assert.equal(api.player.lane, 2);
 });
 test("a repeated top right alternative yields to an exact lower pop command", () => {
   const { api } = loadGame();
@@ -884,6 +912,52 @@ test("a non-command primary alternative does not let a fuzzy lower alternative m
   assert.equal(api.bullets.length, 0);
 });
 
+for (const fireAlias of ["병", "평", "퐁", "핑", "퓽", "피용"]) {
+  test(`exact fire alias ${fireAlias} fires once`, () => {
+    const { api } = loadGame();
+    api.state.scene = "playing";
+    api.player.lane = 2;
+    api.player.cooldown = 0;
+    api.initRecognition();
+
+    const recognition = api.getRecognition();
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, fireAlias, 0);
+
+    assert.equal(api.bullets.length, 1);
+    assert.equal(api.bullets[0].lane, 2);
+  });
+}
+for (const nonFirePhrase of ["병원", "평범", "쇼핑", "퐁당"]) {
+  test(`near fire alias inside ${nonFirePhrase} does not fire`, () => {
+    const { api } = loadGame();
+    api.state.scene = "playing";
+    api.player.lane = 2;
+    api.player.cooldown = 0;
+    api.initRecognition();
+
+    const recognition = api.getRecognition();
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, nonFirePhrase, 0);
+
+    assert.equal(api.bullets.length, 0);
+  });
+}
+
+test("an exact near fire alias in a lower alternative fires once", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, ["민수", "핑"], 0);
+
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 2);
+});
 test("easy UFOs take one shot while a normal stage-four UFO takes more", () => {
   const { api } = loadGame();
   assert.equal(typeof api.enemyHitPoints, "function");
