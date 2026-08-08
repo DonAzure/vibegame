@@ -715,6 +715,40 @@ test("two explicit right commands in one result move two lanes", () => {
 
   assert.equal(api.player.lane, 3);
 });
+test("a repeated top right alternative yields to an exact lower pop command", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 3);
+
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, ["오른쪽", "뿅"], 1);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 3);
+});
+
+test("a fresh alternative set keeps its strong top right command", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, ["오른쪽", "뿅"], 0);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 0);
+});
 test("a lower speech-recognition alternative matching pop fires once in the current lane", () => {
   const { api } = loadGame();
   api.state.scene = "playing";
