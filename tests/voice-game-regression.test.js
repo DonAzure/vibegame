@@ -733,7 +733,7 @@ test("a delayed expansion in the same speech segment does not repeat its right m
   assert.equal(api.bullets[0].lane, 3);
 });
 
-test("a new speech segment can repeat the same right command within the time window", () => {
+test("a new speech segment can repeat the same right command after the fallback window", () => {
   const { api, clock } = loadGame();
   api.state.scene = "playing";
   api.player.lane = 2;
@@ -745,7 +745,7 @@ test("a new speech segment can repeat the same right command within the time win
   emitRecognitionResult(recognition, "오른쪽", 0);
   assert.equal(api.player.lane, 3);
 
-  clock.set(10_100);
+  clock.set(12_100);
   recognition.onspeechstart();
   emitRecognitionResult(recognition, "오른쪽", 1);
 
@@ -818,6 +818,34 @@ test("an immediate top-only repeated right result falls back to firing", () => {
   assert.equal(api.bullets.length, 1);
   assert.equal(api.bullets[0].lane, 3);
 });
+for (const finalText of ["오른쪽", "오른쪽 뿅"]) {
+  test(`an interim right fallback is not repeated by final ${finalText}`, () => {
+    const { api } = loadGame();
+    api.state.scene = "playing";
+    api.player.lane = 2;
+    api.player.cooldown = 0;
+    api.initRecognition();
+
+    const recognition = api.getRecognition();
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, "오른쪽", 0);
+    assert.equal(api.player.lane, 3);
+
+    recognition.onspeechstart();
+    emitRecognitionResult(recognition, "오른쪽", 1, false);
+    assert.equal(api.player.lane, 3);
+    assert.equal(api.bullets.length, 1);
+    assert.equal(api.bullets[0].lane, 3);
+
+    emitRecognitionResult(recognition, finalText, 1, true);
+    assert.equal(api.player.lane, 3);
+    assert.equal(api.bullets.length, 1);
+    assert.equal(api.state.pendingFire, false);
+
+    api.update(1);
+    assert.equal(api.bullets.length, 1);
+  });
+}
 test("a lower speech-recognition alternative matching pop fires once in the current lane", () => {
   const { api } = loadGame();
   api.state.scene = "playing";
