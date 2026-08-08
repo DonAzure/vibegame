@@ -108,6 +108,12 @@ function loadGame() {
   const deterministicMath = Object.create(Math);
   deterministicMath.random = () => 1;
 
+  const speechSynthesis = {
+    cancel() {},
+    speak() {},
+    speaking: false,
+  };
+
   const context = {
     console,
     document: {
@@ -131,11 +137,7 @@ function loadGame() {
     SpeechRecognition: MockRecognition,
     webkitSpeechRecognition: MockRecognition,
     SpeechSynthesisUtterance: MockUtterance,
-    speechSynthesis: {
-      cancel() {},
-      speak() {},
-      speaking: false,
-    },
+    speechSynthesis,
   };
   context.window = context;
   context.window.addEventListener = () => {};
@@ -143,7 +145,7 @@ function loadGame() {
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "index.inline.js" });
 
-  return { api: context.__testApi, storage };
+  return { api: context.__testApi, speechSynthesis, storage };
 }
 
 test("final name saves the score immediately exactly once", () => {
@@ -194,6 +196,72 @@ test("a delayed gameplay result cannot consume the game-over name slot", () => {
   assert.deepEqual(scores.map(({ name, score }) => ({ name, score })), [
     { name: "영희", score: 99 },
   ]);
+});
+
+test("a name spoken after game over saves without a fresh speech-start event", () => {
+  const { api, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 456;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "민지" }, isFinal: true }],
+  });
+
+  const scores = JSON.parse(storage.get("voiceShooter.scores.v1") || "[]");
+  assert.deepEqual(scores.map(({ name, score }) => ({ name, score })), [
+    { name: "민지", score: 456 },
+  ]);
+  assert.equal(api.state.replayPrompt, true);
+});
+
+test("a real name saves after game-over TTS tagged the speech as system", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 654;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  speechSynthesis.speaking = true;
+  recognition.onspeechstart();
+  speechSynthesis.speaking = false;
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "서준" }, isFinal: true }],
+  });
+
+  const scores = JSON.parse(storage.get("voiceShooter.scores.v1") || "[]");
+  assert.deepEqual(scores.map(({ name, score }) => ({ name, score })), [
+    { name: "서준", score: 654 },
+  ]);
+  assert.equal(api.state.replayPrompt, true);
+});
+
+test("the recognizable game-over TTS hint is not saved as a player name", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 777;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  speechSynthesis.speaking = true;
+  recognition.onspeechstart();
+  speechSynthesis.speaking = false;
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{
+      0: { transcript: "게임 오버 이름을 말하면 점수를 저장할 수 있습니다" },
+      isFinal: true,
+    }],
+  });
+
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+  assert.equal(api.state.replayPrompt, false);
 });
 
 test("the first pop command in a restarted recognition session fires", () => {
