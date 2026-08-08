@@ -514,7 +514,7 @@
         voiceResultIndex: -1,
         processedPosMap: {},
         voiceResultProgress: {
-          turn: -1,
+          session: -1,
           resultIndex: -1,
           text: "",
           left: 0,
@@ -555,7 +555,7 @@
       let recognitionRestarting = false;
       let recognitionSpeechScene = "boot";
       let recognitionSpeechActive = false;
-      let recognitionSpeechTurn = 0;
+      let recognitionSession = 0;
       let lastSpokenHintText = "";
       let postGamePromptToken = 0;
       let lastTime = performance.now();
@@ -809,11 +809,12 @@
         recognition.maxAlternatives = 3;
 
         recognition.onstart = () => {
+          recognitionSession += 1;
           state.recognitionActive = true;
           state.permissionDenied = false;
           state.processedPosMap = {};
           state.voiceResultProgress = {
-            turn: -1,
+            session: -1,
             resultIndex: -1,
             text: "",
             left: 0,
@@ -831,7 +832,6 @@
         };
 
         recognition.onspeechstart = () => {
-          recognitionSpeechTurn += 1;
           recognitionSpeechScene = speechSynthesis.speaking ? "system" : state.scene;
           recognitionSpeechActive = true;
         };
@@ -919,7 +919,7 @@
               isFinal: latest.isFinal,
               resultIndex: i,
               speechScene,
-              speechTurn: recognitionSpeechTurn
+              speechSession: recognitionSession
             });
             if (latest.isFinal) {
               recognitionSpeechActive = false;
@@ -1001,7 +1001,7 @@
         state.pendingFire = false;
         state.processedPosMap = {};
         state.voiceResultProgress = {
-          turn: -1,
+          session: -1,
           resultIndex: -1,
           text: "",
           left: 0,
@@ -1297,8 +1297,8 @@
           const rightPos = lastActionPos(text, "right");
           const normalizedText = normalizeSpeech(text);
           const previous = state.voiceResultProgress;
-          const isExpandedResult = Number.isInteger(opts.speechTurn) &&
-            previous.turn === opts.speechTurn &&
+          const isExpandedResult = Number.isInteger(opts.speechSession) &&
+            previous.session === opts.speechSession &&
             previous.resultIndex !== opts.resultIndex &&
             previous.text.length > 0 &&
             normalizedText.length > previous.text.length &&
@@ -1320,9 +1320,9 @@
             pos.fire = fireCount;
           }
 
-          if (Number.isInteger(opts.speechTurn)) {
+          if (Number.isInteger(opts.speechSession)) {
             state.voiceResultProgress = {
-              turn: opts.speechTurn,
+              session: opts.speechSession,
               resultIndex: opts.resultIndex,
               text: normalizedText,
               left: leftCount,
