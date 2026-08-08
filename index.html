@@ -513,7 +513,14 @@
 
         voiceResultIndex: -1,
         processedPosMap: {},
-        voiceTurnPos: { turn: -1, left: 0, right: 0, fire: 0 },
+        voiceResultProgress: {
+          turn: -1,
+          resultIndex: -1,
+          text: "",
+          left: 0,
+          right: 0,
+          fire: 0
+        },
         pendingFire: false,
 
         leaderboard: loadScores()
@@ -805,7 +812,14 @@
           state.recognitionActive = true;
           state.permissionDenied = false;
           state.processedPosMap = {};
-          state.voiceTurnPos = { turn: -1, left: 0, right: 0, fire: 0 };
+          state.voiceResultProgress = {
+            turn: -1,
+            resultIndex: -1,
+            text: "",
+            left: 0,
+            right: 0,
+            fire: 0
+          };
           recognitionSpeechScene = state.scene;
           recognitionSpeechActive = false;
           if ((state.scene === "gameover" || state.scene === "nameEntry") &&
@@ -986,7 +1000,14 @@
         state.nameCaptureReady = true;
         state.pendingFire = false;
         state.processedPosMap = {};
-        state.voiceTurnPos = { turn: -1, left: 0, right: 0, fire: 0 };
+        state.voiceResultProgress = {
+          turn: -1,
+          resultIndex: -1,
+          text: "",
+          left: 0,
+          right: 0,
+          fire: 0
+        };
         voiceCooldownAt.clear();
 
         player.lane = 2;
@@ -1269,27 +1290,22 @@
         const pos = state.processedPosMap[opts.resultIndex];
 
         if (state.scene === "tutorial" || state.scene === "playing") {
-          let turnPos = null;
-          if (Number.isInteger(opts.speechTurn)) {
-            if (state.voiceTurnPos.turn !== opts.speechTurn) {
-              state.voiceTurnPos = {
-                turn: opts.speechTurn,
-                left: 0,
-                right: 0,
-                fire: 0
-              };
-            }
-            turnPos = state.voiceTurnPos;
-          }
-
           const leftCount = actionMatchCount(text, "left");
           const rightCount = actionMatchCount(text, "right");
           const fireCount = actionMatchCount(text, "fire");
           const leftPos = lastActionPos(text, "left");
           const rightPos = lastActionPos(text, "right");
-          const seenLeft = Math.max(pos.left, turnPos ? turnPos.left : 0);
-          const seenRight = Math.max(pos.right, turnPos ? turnPos.right : 0);
-          const seenFire = Math.max(pos.fire, turnPos ? turnPos.fire : 0);
+          const normalizedText = normalizeSpeech(text);
+          const previous = state.voiceResultProgress;
+          const isExpandedResult = Number.isInteger(opts.speechTurn) &&
+            previous.turn === opts.speechTurn &&
+            previous.resultIndex !== opts.resultIndex &&
+            previous.text.length > 0 &&
+            normalizedText.length > previous.text.length &&
+            normalizedText.startsWith(previous.text);
+          const seenLeft = Math.max(pos.left, isExpandedResult ? previous.left : 0);
+          const seenRight = Math.max(pos.right, isExpandedResult ? previous.right : 0);
+          const seenFire = pos.fire;
 
           if (leftCount > seenLeft && leftPos >= rightPos) {
             for (let step = seenLeft; step < leftCount; step++) triggerMove("left");
@@ -1299,14 +1315,20 @@
 
           pos.left = Math.max(pos.left, leftCount);
           pos.right = Math.max(pos.right, rightCount);
-          if (turnPos) {
-            turnPos.left = Math.max(turnPos.left, leftCount);
-            turnPos.right = Math.max(turnPos.right, rightCount);
-          }
 
           if (fireCount > seenFire && triggerFire()) {
             pos.fire = fireCount;
-            if (turnPos) turnPos.fire = Math.max(turnPos.fire, fireCount);
+          }
+
+          if (Number.isInteger(opts.speechTurn)) {
+            state.voiceResultProgress = {
+              turn: opts.speechTurn,
+              resultIndex: opts.resultIndex,
+              text: normalizedText,
+              left: leftCount,
+              right: rightCount,
+              fire: fireCount
+            };
           }
         }
       }
