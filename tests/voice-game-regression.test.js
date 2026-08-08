@@ -115,6 +115,11 @@ function loadGame() {
 
   const deterministicMath = Object.create(Math);
   deterministicMath.random = () => 1;
+  let nowMs = 10_000;
+  const clock = {
+    now: () => nowMs,
+    set(value) { nowMs = Number(value); },
+  };
 
   const speechSynthesis = {
     latestUtterance: null,
@@ -143,7 +148,7 @@ function loadGame() {
       setItem(key, value) { storage.set(key, String(value)); },
     },
     Math: deterministicMath,
-    performance: { now: () => 10_000 },
+    performance: clock,
     prompt: () => null,
     requestAnimationFrame: () => 0,
     setTimeout,
@@ -159,7 +164,7 @@ function loadGame() {
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "index.inline.js" });
 
-  return { api: context.__testApi, getElement, speechSynthesis, storage };
+  return { api: context.__testApi, clock, getElement, speechSynthesis, storage };
 }
 
 function finishLatestUtterance(speechSynthesis) {
@@ -560,6 +565,59 @@ test("a repeated right prefix moves once and the following pop fires once", () =
   assert.equal(api.player.lane, 3);
   assert.equal(api.bullets.length, 1);
   assert.equal(api.bullets[0].lane, 3);
+});
+test("a delayed expansion in the same speech segment does not repeat its right move", () => {
+  const { api, clock } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  clock.set(10_000);
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 3);
+
+  clock.set(10_350);
+  emitRecognitionResult(recognition, "오른쪽 뿅", 1);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 3);
+});
+
+test("a new speech segment can repeat the same right command within the time window", () => {
+  const { api, clock } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  clock.set(10_000);
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 3);
+
+  clock.set(10_100);
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 1);
+
+  assert.equal(api.player.lane, 4);
+});
+
+test("two explicit right commands in one result move two lanes", () => {
+  const { api, clock } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 1;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  clock.set(10_000);
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽 오른쪽", 0);
+
+  assert.equal(api.player.lane, 3);
 });
 test("a lower speech-recognition alternative matching pop fires once in the current lane", () => {
   const { api } = loadGame();
