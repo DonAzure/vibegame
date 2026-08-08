@@ -420,6 +420,55 @@ test("declining score save skips the name and asks whether to replay", () => {
   assert.match(speechSynthesis.latestUtterance.text, /다시.*플레이/);
 });
 
+test("save confirmation accepts an exact lower yes alternative", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 785;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  finishLatestUtterance(speechSynthesis);
+  emitRecognitionResult(recognition, ["내", "네"], 0);
+
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+  assert.equal(api.state.nameEntry.phase, "nameEntry");
+  assert.match(speechSynthesis.latestUtterance.text, /이름.*말/);
+});
+
+test("replay confirmation accepts an exact lower yes alternative", () => {
+  const { api } = loadGame();
+  api.state.scene = "gameover";
+  api.state.nameEntry.phase = "replayConfirm";
+  api.state.nameCaptureReady = true;
+  api.state.replayPrompt = true;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, ["내", "네"], 0);
+
+  assert.equal(api.state.nameCaptureReady, false);
+  assert.match(api.state.message, /다시 시작/);
+});
+
+test("a fresh fire-sounding name is saved after the player explicitly chose save", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 786;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  const nameResultIndex = requestNameCapture(api, speechSynthesis, recognition);
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "탕", nameResultIndex);
+
+  const scores = JSON.parse(storage.get("voiceShooter.scores.v1") || "[]");
+  assert.deepEqual(scores.map(({ name, score }) => ({ name, score })), [
+    { name: "탕", score: 786 },
+  ]);
+  assert.equal(api.state.replayPrompt, true);
+});
 test("the first pop command in a restarted recognition session fires", () => {
   const { api } = loadGame();
   api.state.scene = "playing";
