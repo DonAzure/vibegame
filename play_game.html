@@ -520,7 +520,8 @@
           left: 0,
           right: 0,
           fire: 0,
-          at: 0
+          at: 0,
+          segment: -1
         },
         pendingFire: false,
 
@@ -557,6 +558,7 @@
       let recognitionSpeechScene = "boot";
       let recognitionSpeechActive = false;
       let recognitionSession = 0;
+      let recognitionSpeechSegment = 0;
       let lastSpokenHintText = "";
       let postGamePromptToken = 0;
       let lastTime = performance.now();
@@ -689,7 +691,7 @@
         if (action === "right") aliases.push("오", "오른", "오른쪽", "우측", "우", "오른쪽으로");
         if (action === "left") aliases.push("왼", "왼쪽", "좌측", "좌", "왼쪽으로");
         if (action === "fire") aliases.push("발사", "빵", "탕", "쏘아", "피융", "뿅뿅");
-        if (action === "no") aliases.push("아니요", "아니");
+        if (action === "no") aliases.push("아니오", "아니요", "아뇨", "아니");
         if (action === "yes") aliases.push("응", "네");
         return [...new Set(aliases.filter(Boolean))];
       }
@@ -720,11 +722,10 @@
         );
       }
 
-      function repeatedMoveFireAlternative(primary, alternatives, resultIndex) {
+      function repeatedMoveFireAlternative(primary, alternatives, resultIndex, speechSegment) {
         const fireAlternative = alternatives.slice(1).find(candidate =>
           matchesExactAction(candidate, "fire")
         );
-        if (!fireAlternative) return "";
 
         const direction = matchesExactAction(primary, "left")
           ? "left"
@@ -738,10 +739,16 @@
         const isRecent = performance.now() - previous.at <= 2000;
         const repeatsMoveOnly = previous[direction] > 0 &&
           previous[otherDirection] === 0 && previous.fire === 0;
+        const repeatsRecentMove = previous.session === recognitionSession &&
+          isAdjacentResult && isRecent && repeatsMoveOnly;
 
-        return previous.session === recognitionSession &&
-          isAdjacentResult && isRecent && repeatsMoveOnly
-          ? fireAlternative
+        if (!repeatsRecentMove) return "";
+        if (fireAlternative) return fireAlternative;
+
+        const isNewSpeechSegment = Number.isInteger(speechSegment) &&
+          previous.segment !== speechSegment;
+        return isNewSpeechSegment && alternatives.length === 1
+          ? (keywordAliases("fire")[0] || "뿅")
           : "";
       }
 
@@ -836,6 +843,7 @@
 
         recognition.onstart = () => {
           recognitionSession += 1;
+          recognitionSpeechSegment = 0;
           state.recognitionActive = true;
           state.permissionDenied = false;
           state.processedPosMap = {};
@@ -846,7 +854,8 @@
             left: 0,
             right: 0,
             fire: 0,
-            at: 0
+            at: 0,
+            segment: -1
           };
           recognitionSpeechScene = state.scene;
           recognitionSpeechActive = false;
@@ -859,6 +868,7 @@
         };
 
         recognition.onspeechstart = () => {
+          recognitionSpeechSegment += 1;
           recognitionSpeechScene = speechSynthesis.speaking ? "system" : state.scene;
           recognitionSpeechActive = true;
         };
@@ -919,7 +929,27 @@
                state.nameEntry.phase === "replayConfirm");
             let text = alternatives[0];
             if (inPlayableScene) {
-              text = repeatedMoveFireAlternative(alternatives[0], alternatives, i) ||
+              const repeatedMoveFire = repeatedMoveFireAlternative(
+                alternatives[0], alternatives, i, recognitionSpeechSegment
+              );
+              if (repeatedMoveFire) {
+                const suppressedDirection = matchesExactAction(alternatives[0], "left")
+                  ? "left"
+                  : "right";
+                if (!state.processedPosMap[i]) {
+                  state.processedPosMap[i] = {
+                    left: 0,
+                    right: 0,
+                    fire: 0,
+                    settings: 0
+                  };
+                }
+                state.processedPosMap[i][suppressedDirection] = Math.max(
+                  state.processedPosMap[i][suppressedDirection],
+                  actionMatchCount(alternatives[0], suppressedDirection)
+                );
+              }
+              text = repeatedMoveFire ||
                 (hasStrongGameplayCommand(alternatives[0])
                   ? alternatives[0]
                   : alternatives.slice(1).find(isExactGameplayCommand));
@@ -947,7 +977,8 @@
               isFinal: latest.isFinal,
               resultIndex: i,
               speechScene,
-              speechSession: recognitionSession
+              speechSession: recognitionSession,
+              speechSegment: recognitionSpeechSegment
             });
             if (latest.isFinal) {
               recognitionSpeechActive = false;
@@ -1035,7 +1066,8 @@
           left: 0,
           right: 0,
           fire: 0,
-          at: 0
+          at: 0,
+          segment: -1
         };
         voiceCooldownAt.clear();
 
@@ -1253,9 +1285,13 @@
         }
 
         if (state.scene === "nameEntry" || state.scene === "gameover") {
-          if (!isFinal || !state.nameCaptureReady) return;
-
           const phase = state.nameEntry.phase;
+          const isExactDecision = matchesExactAction(text, "yes") ||
+            matchesExactAction(text, "no");
+          const acceptsInterimDecision =
+            (phase === "saveConfirm" || phase === "replayConfirm") &&
+            isExactDecision;
+          if (!state.nameCaptureReady || (!isFinal && !acceptsInterimDecision)) return;
           if (phase === "saveConfirm") {
             if (matchesExactAction(text, "yes")) {
               beginPostGamePrompt(
@@ -1357,7 +1393,8 @@
               left: leftCount,
               right: rightCount,
               fire: fireCount,
-              at: performance.now()
+              at: performance.now(),
+              segment: opts.speechSegment
             };
           }
         }
