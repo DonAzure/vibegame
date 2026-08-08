@@ -705,8 +705,17 @@
         return keywordAliases(action).some(word => normalizeSpeech(word) === normalized);
       }
 
+      const EXACT_FIRE_RECOGNITION_ALIASES = ["병", "평", "퐁", "핑", "퓽", "피용"];
+
+      function matchesExactGameplayFire(text) {
+        const normalized = normalizeSpeech(text);
+        return matchesExactAction(text, "fire") ||
+          EXACT_FIRE_RECOGNITION_ALIASES.some(word => normalizeSpeech(word) === normalized);
+      }
+
       function hasStrongGameplayCommand(text) {
         const normalized = normalizeSpeech(text);
+        if (EXACT_FIRE_RECOGNITION_ALIASES.some(word => normalizeSpeech(word) === normalized)) return true;
         return ["left", "right", "fire", "settings"].some(action =>
           keywordAliases(action).some(word => {
             const keyword = normalizeSpeech(word);
@@ -717,14 +726,14 @@
 
       function isExactGameplayCommand(text) {
         const normalized = normalizeSpeech(text);
-        return ["left", "right", "fire", "settings"].some(action =>
+        return matchesExactGameplayFire(text) || ["left", "right", "settings"].some(action =>
           keywordAliases(action).some(word => normalizeSpeech(word) === normalized)
         );
       }
 
       function repeatedMoveFireAlternative(primary, alternatives, resultIndex, speechSegment) {
         const fireAlternative = alternatives.slice(1).find(candidate =>
-          matchesExactAction(candidate, "fire")
+          matchesExactGameplayFire(candidate)
         );
 
         const direction = matchesExactAction(primary, "left")
@@ -941,13 +950,15 @@
                     left: 0,
                     right: 0,
                     fire: 0,
-                    settings: 0
+                    settings: 0,
+                    move: true
                   };
                 }
                 state.processedPosMap[i][suppressedDirection] = Math.max(
                   state.processedPosMap[i][suppressedDirection],
                   actionMatchCount(alternatives[0], suppressedDirection)
                 );
+                state.processedPosMap[i].move = true;
               }
               text = repeatedMoveFire ||
                 (hasStrongGameplayCommand(alternatives[0])
@@ -1350,14 +1361,17 @@
         }
 
         if (!state.processedPosMap[opts.resultIndex]) {
-          state.processedPosMap[opts.resultIndex] = { left: 0, right: 0, fire: 0, settings: 0 };
+          state.processedPosMap[opts.resultIndex] = { left: 0, right: 0, fire: 0, settings: 0, move: false };
         }
         const pos = state.processedPosMap[opts.resultIndex];
 
         if (state.scene === "tutorial" || state.scene === "playing") {
           const leftCount = actionMatchCount(text, "left");
           const rightCount = actionMatchCount(text, "right");
-          const fireCount = actionMatchCount(text, "fire");
+          const fireCount = Math.max(
+            actionMatchCount(text, "fire"),
+            matchesExactGameplayFire(text) ? 1 : 0
+          );
           const leftPos = lastActionPos(text, "left");
           const rightPos = lastActionPos(text, "right");
           const normalizedText = normalizeSpeech(text);
@@ -1372,10 +1386,12 @@
           const seenRight = Math.max(pos.right, isExpandedResult ? previous.right : 0);
           const seenFire = pos.fire;
 
-          if (leftCount > seenLeft && leftPos >= rightPos) {
-            for (let step = seenLeft; step < leftCount; step++) triggerMove("left");
-          } else if (rightCount > seenRight && rightPos > leftPos) {
-            for (let step = seenRight; step < rightCount; step++) triggerMove("right");
+          if (!pos.move && leftCount > seenLeft && leftPos >= rightPos) {
+            triggerMove("left");
+            pos.move = true;
+          } else if (!pos.move && rightCount > seenRight && rightPos > leftPos) {
+            triggerMove("right");
+            pos.move = true;
           }
 
           pos.left = Math.max(pos.left, leftCount);
