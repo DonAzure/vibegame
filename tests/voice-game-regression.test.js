@@ -284,6 +284,26 @@ test("a short system-tagged game-over TTS partial is not saved as a name", () =>
   assert.equal(api.state.replayPrompt, false);
 });
 
+test("a two-character system-tagged TTS fragment is not saved as a name", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 781;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  speechSynthesis.speaking = true;
+  recognition.onspeechstart();
+  speechSynthesis.speaking = false;
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "게임" }, isFinal: true }],
+  });
+
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+  assert.equal(api.state.replayPrompt, false);
+});
+
 test("a delayed natural gameplay phrase is not saved as a player name", () => {
   const { api, storage } = loadGame();
   api.state.scene = "playing";
