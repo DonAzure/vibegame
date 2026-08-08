@@ -643,6 +643,25 @@ test("a prefix compound final treats pop as a new fire command", () => {
   assert.equal(api.bullets.length, 2);
   assert.deepEqual(Array.from(api.bullets, (bullet) => bullet.lane), [2, 3]);
 });
+test("a new speech-start extension adds fire without repeating its right move", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽", 0);
+  assert.equal(api.player.lane, 3);
+
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "오른쪽 뿅", 1);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 1);
+  assert.equal(api.bullets[0].lane, 3);
+});
 test("a delayed expansion in the same speech segment does not repeat its right move", () => {
   const { api, clock } = loadGame();
   api.state.scene = "playing";
