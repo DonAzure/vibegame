@@ -586,7 +586,7 @@ test("separate final pop results in one speech segment each fire", () => {
 
   emitRecognitionResult(recognition, "뿅", 2);
   assert.equal(api.bullets.length, 3);
-  assert.deepEqual(api.bullets.map((bullet) => bullet.lane), [2, 2, 2]);
+  assert.deepEqual(Array.from(api.bullets, (bullet) => bullet.lane), [2, 2, 2]);
 });
 
 test("separate final right results in one speech segment each move once", () => {
@@ -602,6 +602,26 @@ test("separate final right results in one speech segment each move once", () => 
 
   emitRecognitionResult(recognition, "오른쪽", 1);
   assert.equal(api.player.lane, 3);
+});
+test("a later compound command containing pop still fires as a new final result", () => {
+  const { api } = loadGame();
+  api.state.scene = "playing";
+  api.player.lane = 2;
+  api.player.cooldown = 0;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  emitRecognitionResult(recognition, "뿅", 0);
+  assert.equal(api.player.lane, 2);
+  assert.equal(api.bullets.length, 1);
+  api.update(1);
+
+  emitRecognitionResult(recognition, "오른쪽 뿅", 1);
+
+  assert.equal(api.player.lane, 3);
+  assert.equal(api.bullets.length, 2);
+  assert.deepEqual(Array.from(api.bullets, (bullet) => bullet.lane), [2, 3]);
 });
 test("a delayed expansion in the same speech segment does not repeat its right move", () => {
   const { api, clock } = loadGame();
