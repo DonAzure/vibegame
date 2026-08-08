@@ -264,6 +264,64 @@ test("the recognizable game-over TTS hint is not saved as a player name", () => 
   assert.equal(api.state.replayPrompt, false);
 });
 
+test("a short system-tagged game-over TTS partial is not saved as a name", () => {
+  const { api, speechSynthesis, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 778;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  speechSynthesis.speaking = true;
+  recognition.onspeechstart();
+  speechSynthesis.speaking = false;
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "게임 오버" }, isFinal: true }],
+  });
+
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+  assert.equal(api.state.replayPrompt, false);
+});
+
+test("a delayed natural gameplay phrase is not saved as a player name", () => {
+  const { api, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 779;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  recognition.onspeechstart();
+  api.gameOver();
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "오른쪽으로 가" }, isFinal: true }],
+  });
+
+  assert.equal(storage.get("voiceShooter.scores.v1"), undefined);
+  assert.equal(api.state.replayPrompt, false);
+});
+
+test("a valid alias-only name saves after game over", () => {
+  const { api, storage } = loadGame();
+  api.state.scene = "playing";
+  api.state.score = 780;
+  api.initRecognition();
+
+  const recognition = api.getRecognition();
+  api.gameOver();
+  recognition.onresult({
+    resultIndex: 0,
+    results: [{ 0: { transcript: "오우" }, isFinal: true }],
+  });
+
+  const scores = JSON.parse(storage.get("voiceShooter.scores.v1") || "[]");
+  assert.deepEqual(scores.map(({ name, score }) => ({ name, score })), [
+    { name: "오우", score: 780 },
+  ]);
+  assert.equal(api.state.replayPrompt, true);
+});
+
 test("the first pop command in a restarted recognition session fires", () => {
   const { api } = loadGame();
   api.state.scene = "playing";
